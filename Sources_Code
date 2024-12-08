@@ -1,0 +1,190 @@
+import os
+import tensorflow as tf
+from tensorflow.keras import layers, models, applications, optimizers
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+import matplotlib.pyplot as plt
+
+class ChineseHerbClassifier:
+    def __init__(self, base_dir=r"C:\Users\Kishore\Downloads\ChineseHerbs", img_size=(128, 128), batch_size=32):
+        self.base_dir = base_dir
+        self.img_size = img_size
+        self.batch_size = batch_size
+        self.categories = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+        
+    def display_sample_images(self):
+        fig, axes = plt.subplots(len(self.categories), 2, figsize=(10, len(self.categories) * 3))
+        for i, category in enumerate(self.categories):
+            category_path = os.path.join(self.base_dir, category)
+            sample_images = os.listdir(category_path)[:2]
+            for j, img_name in enumerate(sample_images):
+                img_path = os.path.join(category_path, img_name)
+                img = plt.imread(img_path)
+                axes[i, j].imshow(img)
+                axes[i, j].set_title(category)
+                axes[i, j].axis("off")
+        plt.tight_layout()
+        plt.show()
+        
+    def setup_data(self):
+        # Basic data preprocessing for baseline model
+        self.train_datagen = ImageDataGenerator(
+            rescale=1.0/255,
+            validation_split=0.2
+        )
+        
+        self.train_generator = self.train_datagen.flow_from_directory(
+            self.base_dir,
+            target_size=self.img_size,
+            batch_size=self.batch_size,
+            class_mode='categorical',
+            subset='training',
+            shuffle=True
+        )
+        
+        self.val_generator = self.train_datagen.flow_from_directory(
+            self.base_dir,
+            target_size=self.img_size,
+            batch_size=self.batch_size,
+            class_mode='categorical',
+            subset='validation',
+            shuffle=False
+        )
+    
+    def build_baseline_model(self):
+        # Task 1: Simple CNN architecture for baseline
+        inputs = layers.Input(shape=(*self.img_size, 3))
+        x = layers.Conv2D(32, (3, 3), activation='relu')(inputs)
+        x = layers.MaxPooling2D((2, 2))(x)
+        x = layers.Conv2D(64, (3, 3), activation='relu')(x)
+        x = layers.MaxPooling2D((2, 2))(x)
+        x = layers.Conv2D(64, (3, 3), activation='relu')(x)
+        x = layers.Flatten()(x)
+        x = layers.Dense(64, activation='relu')(x)
+        outputs = layers.Dense(len(self.categories), activation='softmax')(x)
+        
+        self.model = models.Model(inputs=inputs, outputs=outputs)
+        self.model.compile(
+            optimizer='adam',
+            loss='categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+    def build_enhanced_model(self):
+        try:
+            # Task 2: Enhanced model using transfer learning
+            base_model = applications.EfficientNetB0(
+                include_top=False,
+                weights='imagenet',
+                input_shape=(*self.img_size, 3)
+            )
+            base_model.trainable = False
+            
+            inputs = layers.Input(shape=(*self.img_size, 3))
+            x = base_model(inputs)
+            x = layers.GlobalAveragePooling2D()(x)
+            x = layers.BatchNormalization()(x)
+            x = layers.Dense(256, activation='relu')(x)
+            x = layers.Dropout(0.5)(x)
+            x = layers.Dense(128, activation='relu')(x)
+            x = layers.Dropout(0.3)(x)
+            outputs = layers.Dense(len(self.categories), activation='softmax')(x)
+            
+            self.model = models.Model(inputs=inputs, outputs=outputs)
+            
+            # Learning rate scheduling
+            initial_lr = 0.001
+            lr_schedule = optimizers.schedules.ExponentialDecay(
+                initial_lr, decay_steps=100, decay_rate=0.9
+            )
+            
+            self.model.compile(
+                optimizer=optimizers.Adam(learning_rate=lr_schedule),
+                loss='categorical_crossentropy',
+                metrics=['accuracy']
+            )
+        except Exception as e:
+            print(f"Error in build_enhanced_model: {str(e)}")
+            raise
+        
+    def train(self, epochs=30, enhanced=False):
+        try:
+            if enhanced:
+                callbacks = [
+                    tf.keras.callbacks.EarlyStopping(
+                        monitor='val_loss',
+                        patience=5,
+                        restore_best_weights=True
+                    ),
+                    tf.keras.callbacks.ReduceLROnPlateau(
+                        monitor='val_loss',
+                        factor=0.2,
+                        patience=3
+                    )
+                ]
+            else:
+                callbacks = [
+                    tf.keras.callbacks.EarlyStopping(
+                        monitor='val_loss',
+                        patience=3,
+                        restore_best_weights=True
+                    )
+                ]
+            
+            return self.model.fit(
+                self.train_generator,
+                validation_data=self.val_generator,
+                epochs=epochs,
+                callbacks=callbacks
+            )
+        except Exception as e:
+            print(f"Error during training: {str(e)}")
+            raise
+
+    def plot_training_history(self, history):
+        try:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+            
+            ax1.plot(history.history['accuracy'], label='Training')
+            ax1.plot(history.history['val_accuracy'], label='Validation')
+            ax1.set_title('Model Accuracy')
+            ax1.set_xlabel('Epoch')
+            ax1.set_ylabel('Accuracy')
+            ax1.legend()
+            
+            ax2.plot(history.history['loss'], label='Training')
+            ax2.plot(history.history['val_loss'], label='Validation')
+            ax2.set_title('Model Loss')
+            ax2.set_xlabel('Epoch')
+            ax2.set_ylabel('Loss')
+            ax2.legend()
+            
+            plt.tight_layout()
+            plt.show()
+        except Exception as e:
+            print(f"Error in plotting: {str(e)}")
+
+if __name__ == "__main__":
+    try:
+        # Initialize classifier
+        classifier = ChineseHerbClassifier()
+        
+        # Display sample images from each category
+        print("Displaying sample images from each category...")
+        classifier.display_sample_images()
+        
+        # Task 1: Baseline model
+        classifier.setup_data()
+        classifier.build_baseline_model()
+        print("\nTraining baseline model...")
+        baseline_history = classifier.train(epochs=15, enhanced=False)
+        print("\nBaseline model performance:")
+        classifier.plot_training_history(baseline_history)
+        
+        # Task 2: Enhanced model
+        classifier.build_enhanced_model()
+        print("\nTraining enhanced model...")
+        enhanced_history = classifier.train(epochs=30, enhanced=True)
+        print("\nEnhanced model performance:")
+        classifier.plot_training_history(enhanced_history)
+    except Exception as e:
+        print(f"Main execution error: {str(e)}")
